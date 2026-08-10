@@ -51,7 +51,11 @@ git clone https://github.com/u7-u7/developer-resume-writer.git ~/.codex/skills/d
 
 ## 你会拿到什么 📦
 
-默认生成 `项目经历.md`，格式如下：
+默认生成 `项目经历.md`。下面是一次真实调用的效果：
+
+![项目经历生成效果图](assets/usage-demo.png)
+
+输出格式如下：
 
 ```markdown
 ## <项目名称>
