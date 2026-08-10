@@ -16,6 +16,18 @@ TEMPLATE_URL = "https://www.codecvcv.com/jianlimoban/15simple_versatile"
 SECTION_ORDER = ("教育经历", "实习经历/工作经历", "项目经历", "专业技能", "奖项/校园经历", "待确认", "CodeCV 设置")
 SECTIONS = set(SECTION_ORDER)
 REQUIRED_LAYERS = {"入口", "核心流程", "数据模型", "异常或权限边界", "测试或运行验证"}
+INTAKE_KEYS = {
+    "source_kind",
+    "authorized",
+    "read_only",
+    "history_used",
+    "credentials_used",
+    "submodules_used",
+    "execution_used",
+    "temporary_cleanup",
+}
+ANON_PROJECT_ID = re.compile(r"^p-[a-z0-9-]{1,20}$")
+ANON_EVIDENCE_ID = re.compile(r"^e-[a-z0-9-]{1,20}$")
 BULLET = re.compile(r"^- \*\*(?P<title>[^*\n｜]{1,16})\*\*｜(?P<body>\S.*)$")
 PROJECT_TITLE = re.compile(r"^### \*\*某[^*\n]{0,30}\*\*(?: - .+)?$")
 URL = re.compile(r"(?:https?://|www\.)[^\s)>]+", re.IGNORECASE)
@@ -35,6 +47,18 @@ class EvidenceEntry:
     evidence_ids: frozenset[str]
     project_id: str
     fact_kind: str
+
+
+@dataclass(frozen=True)
+class IntakeEntry:
+    source_kind: str
+    authorized: bool
+    read_only: bool
+    history_used: bool
+    credentials_used: bool
+    submodules_used: bool
+    execution_used: bool
+    temporary_cleanup: str
 
 
 def grapheme_count(text: str) -> int:
@@ -87,7 +111,7 @@ def load_evidence(raw: str) -> dict[int, EvidenceEntry]:
 def load_source_evidence(raw: str) -> dict[str, dict[str, str]]:
     projects: dict[str, dict[str, str]] = {}
     for project_id, value in load_json(raw, "项目证据清单").items():
-        if not isinstance(value, dict) or not isinstance(value.get("evidence"), list):
+        if not ANON_PROJECT_ID.match(str(project_id)) or not isinstance(value, dict) or not isinstance(value.get("evidence"), list):
             raise ValueError("项目证据清单每个项目必须包含 evidence 列表")
         records: dict[str, str] = {}
         for record in value["evidence"]:
@@ -95,11 +119,34 @@ def load_source_evidence(raw: str) -> dict[str, dict[str, str]]:
                 raise ValueError("项目证据项必须是对象")
             evidence_id = str(record.get("id", ""))
             layer = str(record.get("layer", ""))
-            if not evidence_id or layer not in REQUIRED_LAYERS:
+            if not ANON_EVIDENCE_ID.match(evidence_id) or layer not in REQUIRED_LAYERS:
                 raise ValueError("项目证据项缺少有效匿名编号或层级")
             records[evidence_id] = layer
         projects[str(project_id)] = records
     return projects
+
+
+def load_intake(raw: str) -> dict[str, IntakeEntry]:
+    entries: dict[str, IntakeEntry] = {}
+    for project_id, value in load_json(raw, "项目接入账本").items():
+        if not ANON_PROJECT_ID.match(str(project_id)) or not isinstance(value, dict):
+            raise ValueError("项目接入账本必须使用匿名项目编号和固定字段")
+        if set(value) - INTAKE_KEYS:
+            raise ValueError("项目接入账本包含不允许的来源字段")
+        source_kind = str(value.get("source_kind", ""))
+        if source_kind not in {"remote_clone", "local_directory"}:
+            raise ValueError("项目接入账本缺少有效来源类型")
+        entries[str(project_id)] = IntakeEntry(
+            source_kind=source_kind,
+            authorized=value.get("authorized") is True,
+            read_only=value.get("read_only") is True,
+            history_used=value.get("history_used") is True,
+            credentials_used=value.get("credentials_used") is True,
+            submodules_used=value.get("submodules_used") is True,
+            execution_used=value.get("execution_used") is True,
+            temporary_cleanup=str(value.get("temporary_cleanup", "")),
+        )
+    return entries
 
 
 def load_banned_terms(path: Path) -> tuple[str, ...]:
@@ -117,8 +164,24 @@ def validate_project_evidence(projects: dict[str, dict[str, str]]) -> list[str]:
     return errors
 
 
-def validate(text: str, evidence: dict[int, EvidenceEntry], projects: dict[str, dict[str, str]], banned_terms: tuple[str, ...]) -> list[str]:
-    errors = validate_project_evidence(projects)
+def validate_intake(projects: dict[str, dict[str, str]], intakes: dict[str, IntakeEntry]) -> list[str]:
+    errors: list[str] = []
+    for project_id in projects:
+        intake = intakes.get(project_id)
+        if intake is None:
+            errors.append(f"项目 {project_id} 缺少项目接入账本")
+            continue
+        if not intake.authorized or not intake.read_only:
+            errors.append(f"项目 {project_id} 未满足访问授权或只读要求")
+        if any((intake.history_used, intake.credentials_used, intake.submodules_used, intake.execution_used)):
+            errors.append(f"项目 {project_id} 使用了不允许的访问方式")
+        if intake.source_kind == "remote_clone" and intake.temporary_cleanup != "complete":
+            errors.append(f"项目 {project_id} 的远程临时目录未清理")
+    return errors
+
+
+def validate(text: str, evidence: dict[int, EvidenceEntry], projects: dict[str, dict[str, str]], intakes: dict[str, IntakeEntry], banned_terms: tuple[str, ...]) -> list[str]:
+    errors = validate_project_evidence(projects) + validate_intake(projects, intakes)
     lines = text.splitlines()
     markers = [line.strip() for line in lines if line.strip().startswith(":::")]
     if markers.count("::: headStart") != 1 or markers.count("::: headEnd") != 1:
@@ -227,10 +290,11 @@ def main() -> int:
     parser.add_argument("resume", help="简历 Markdown 文件路径，或 - 代表标准输入")
     parser.add_argument("--evidence-json", required=True, help="成果账本：行号到匿名证据对象的 JSON")
     parser.add_argument("--source-evidence-json", required=True, help="项目源码证据清单 JSON")
+    parser.add_argument("--intake-json", required=True, help="项目接入账本：只含匿名编号与安全状态的 JSON")
     parser.add_argument("--banned-terms-file", type=Path, required=True, help="受限临时敏感词表；校验后立即删除")
     args = parser.parse_args()
     try:
-        errors = validate(read_text(args.resume), load_evidence(args.evidence_json), load_source_evidence(args.source_evidence_json), load_banned_terms(args.banned_terms_file))
+        errors = validate(read_text(args.resume), load_evidence(args.evidence_json), load_source_evidence(args.source_evidence_json), load_intake(args.intake_json), load_banned_terms(args.banned_terms_file))
     except (OSError, ValueError) as exc:
         print(f"校验失败：{exc}")
         return 2
