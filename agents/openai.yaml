@@ -1,4 +1,4 @@
 interface:
   display_name: "项目经历写作"
-  short_description: "根据 Git 项目或本地目录生成简历项目经历与产出文案"
-  default_prompt: "使用 $developer-resume-writer，根据这个项目地址帮我写简历里的项目简介和项目产出。"
+  short_description: "根据项目或现有简历，生成并优化项目简介、亮点和产出"
+  default_prompt: "使用 $developer-resume-writer，根据这个项目或我的现有简历，写出核心功能清楚、亮点和产出自洽的项目经历。"
