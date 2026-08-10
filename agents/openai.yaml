@@ -1,4 +1,4 @@
 interface:
-  display_name: "研发简历写作"
-  short_description: "强制脱敏、证据校验与 CodeCV 渲染的研发简历写作"
-  default_prompt: "使用 $developer-resume-writer，为我生成需先确认、强制脱敏且通过证据校验的研发简历。"
+  display_name: "项目经历写作"
+  short_description: "根据 Git 项目或本地目录生成简历项目经历与产出文案"
+  default_prompt: "使用 $developer-resume-writer，根据这个项目地址帮我写简历里的项目简介和项目产出。"
