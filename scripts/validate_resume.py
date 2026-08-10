@@ -39,6 +39,8 @@ PATH = re.compile(r"(?<!:)\/(?:[\w.-]+\/){1,}[\w.-]+")
 FORBIDDEN = re.compile(r"零丢失|100%|百分之百|完全|绝对|必然")
 METRIC = re.compile(r"\d+(?:\.\d+)?(?:%|ms|毫秒|秒|分钟|小时|倍|万|千|人|GB|MB|QPS|TPS)", re.IGNORECASE)
 LEAD = re.compile(r"^(基于|通过|围绕|采用|使用|构建|设计|优化|实现|改造|排查|拆分)")
+PROJECT_INTRO = re.compile(r"^\*\*项目简介\*\*：(?P<body>\S.*)$")
+INTRO_FORBIDDEN = re.compile(r"主导|独立|负责|完成|从\s*0\s*到\s*1|提升|降低|缩短|保障|显著")
 
 
 @dataclass(frozen=True)
@@ -200,6 +202,7 @@ def validate(text: str, evidence: dict[int, EvidenceEntry], projects: dict[str, 
     titles: set[str] = set()
     leads_by_project: dict[str, set[str]] = {}
     evidence_project_by_header: dict[str, str] = {}
+    project_intro_by_header: set[str] = set()
     for number, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip()
         if not line:
@@ -229,6 +232,18 @@ def validate(text: str, evidence: dict[int, EvidenceEntry], projects: dict[str, 
             else:
                 project_headers += 1
                 current_project = f"项目{project_headers}"
+        intro_match = PROJECT_INTRO.match(line)
+        if intro_match:
+            if current_section != "项目经历" or not current_project:
+                errors.append(f"第 {number} 行的项目简介不在项目经历中")
+            else:
+                intro = intro_match.group("body")
+                intro_length = grapheme_count(visible_text(intro))
+                if not 80 <= intro_length <= 120:
+                    errors.append(f"第 {number} 行的项目简介应为 80–120 个字符")
+                if METRIC.search(intro) or INTRO_FORBIDDEN.search(intro):
+                    errors.append(f"第 {number} 行的项目简介包含个人归因或结果断言")
+                project_intro_by_header.add(current_project)
         if not line.startswith("- "):
             continue
         if current_section == "CodeCV 设置":
@@ -278,6 +293,8 @@ def validate(text: str, evidence: dict[int, EvidenceEntry], projects: dict[str, 
         errors.append("简历必须至少包含一个项目经历、泛化项目标题和成果条目")
     if len(evidence_project_by_header) != project_headers:
         errors.append("每个项目标题必须至少关联一条成果与一组源码证据")
+    if len(project_intro_by_header) != project_headers:
+        errors.append("每个项目标题必须包含一条合规的项目简介")
     if pending_questions > 5:
         errors.append("待确认问题不得超过五条")
     if seen_sections != sorted(seen_sections, key=SECTION_ORDER.index):
